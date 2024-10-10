@@ -5,10 +5,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
-# Step 1: Load the dataset (2024 data removed)
-data = pd.read_csv(r'pl-tables-1993-2024.csv')
+# Load the dataset (2024 data removed)
+data = pd.read_csv(r'pl-tables-1993-2023.csv')
 
-# Step 2: Data Preprocessing
+# Data Preprocessing
 # Define the features
 features = ['played', 'won', 'lost', 'drawn', 'gf', 'ga', 'gd', 'points']
 target = 'position'
@@ -16,59 +16,102 @@ target = 'position'
 X = data[features]  # Feature columns
 y = data[target]    # Target column (Position)
 
-# Step 3: Train-Test Split (80% training, 20% testing)
+# Train-Test Split (80% training, 20% testing)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Step 4: Model Selection & Training
+# Model Selection & Training
 
 ## Baseline Model: Linear Regression
 linear_model = LinearRegression()
 linear_model.fit(X_train, y_train)
 
-# Step 5: Model Evaluation for Linear Regression
-y_pred_linear = linear_model.predict(X_test)
-
-# Evaluate Linear Regression
-print("Linear Regression:")
-print("Mean Absolute Error:", mean_absolute_error(y_test, y_pred_linear))
-print("R2 Score:", r2_score(y_test, y_pred_linear))
-
 ## Advanced Model: Random Forest Regressor
 rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
 rf_model.fit(X_train, y_train)
 
-# Step 6: Model Evaluation for Random Forest
-y_pred_rf = rf_model.predict(X_test)
+# Function to Predict for a Specified Year
+def compare_predictions(teams, actual_standings):
+    # Filter the data for seasons that occurred before 2024
+    historical_data = data[data['season_end_year'] < 2024]
 
-# Evaluate Random Forest
-print("\nRandom Forest Regressor:")
-print("Mean Absolute Error:", mean_absolute_error(y_test, y_pred_rf))
-print("R2 Score:", r2_score(y_test, y_pred_rf))
+    if historical_data.empty:
+        raise ValueError("No historical data available before 2024.")
 
-# Step 7: Function to Predict for a Specified Year
-# Modified predict_for_year function
-def predict_for_year(year):
-    if year > 2024 or year < 1993:
-        raise ValueError("Year must be between 1993 and 2024.")
-    
-    # Filter the data for the specified year from the original dataset
-    data_year = data[data['season_end_year'] == year]
-    
-    if data_year.empty:
-        raise ValueError(f"No data available for the year {season_end_year}.")
-    
-    X_year = data_year[features]  # Features for the specified year
-    
-    # Predict standings using Random Forest
-    predicted_positions = rf_model.predict(X_year)
-    
-    # Save the predicted positions to a CSV file
-    predicted_df = pd.DataFrame({
-        'Team': data_year['team'],  # Assuming 'team' column is in your dataset
-        'Predicted Position': predicted_positions
-    })
-    output_file = f'predicted_positions_{year}.csv'
-    predicted_df.to_csv(output_file, index=False)
-    print(f"\nPredicted standings for {year} saved to '{output_file}'")
+    # Train the model again using only the data from previous years
+    X_historical = historical_data[features]
+    y_historical = historical_data[target]
 
-predict_for_year(2024)
+    # Re-train the model using all previous data
+    rf_model.fit(X_historical, y_historical)
+
+    # Create an empty list to store predicted positions
+    predictions = []
+
+    # Loop through each team for prediction
+    for team in teams:
+        # Get past data for the specified team before 2024
+        team_data = historical_data[historical_data['team'] == team]
+
+        if team_data.empty:
+            print(f"No historical data available for {team}, skipping...")
+            continue
+
+        # Calculate average or trend of past performance metrics for the team
+        trend_features = team_data[features].mean()  # Using average as a proxy for trends
+
+        # Reshape for model prediction (as RF expects 2D input)
+        X_team = trend_features.values.reshape(1, -1)
+
+        # Predict future standing for the team using the trained Random Forest model
+        predicted_position = rf_model.predict(X_team)[0]  # Get single prediction
+
+        # Store the result
+        predictions.append({'Team': team, 'Predicted Position': predicted_position})
+
+    # Convert predictions to DataFrame
+    predicted_df = pd.DataFrame(predictions)
+    
+    # Merge predicted positions with actual positions
+    actual_df = pd.DataFrame(actual_standings, columns=['Team', 'Actual Position'])
+    comparison_df = pd.merge(predicted_df, actual_df, on='Team')
+
+    # Calculate the difference between predicted and actual positions
+    comparison_df['Position Difference'] = comparison_df['Predicted Position'] - comparison_df['Actual Position']
+
+    # Save the comparison results to a CSV file
+    output_file = '2024_comparison_predictions.csv'
+    comparison_df.to_csv(output_file, index=False)
+
+    # Calculate the R² score (how well the predictions fit the actual standings)
+    r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])
+    
+    # Output R² score
+    print(f"\nR² value: {r2}")
+
+
+# Actual 2024 standings
+actual_standings_2024 = [
+    {'Team': 'Manchester City', 'Actual Position': 1},
+    {'Team': 'Arsenal', 'Actual Position': 2},
+    {'Team': 'Liverpool', 'Actual Position': 3},
+    {'Team': 'Aston Villa', 'Actual Position': 4},
+    {'Team': 'Tottenham Hotspur', 'Actual Position': 5},
+    {'Team': 'Chelsea', 'Actual Position': 6},
+    {'Team': 'Newcastle United', 'Actual Position': 7},
+    {'Team': 'Manchester United', 'Actual Position': 8},
+    {'Team': 'West Ham United', 'Actual Position': 9},
+    {'Team': 'Crystal Palace', 'Actual Position': 10},
+    {'Team': 'Brighton & Hove Albion', 'Actual Position': 11},
+    {'Team': 'AFC Bournemouth', 'Actual Position': 12},
+    {'Team': 'Fulham', 'Actual Position': 13},
+    {'Team': 'Wolverhampton Wanderers', 'Actual Position': 14},
+    {'Team': 'Everton', 'Actual Position': 15},
+    {'Team': 'Brentford', 'Actual Position': 16},
+    {'Team': 'Nottingham Forest', 'Actual Position': 17},
+    {'Team': 'Luton Town', 'Actual Position': 18},
+    {'Team': 'Burnley', 'Actual Position': 19},
+    {'Team': 'Sheffield United', 'Actual Position': 20},
+]
+
+teams_2024 = ['Manchester Utd', 'Chelsea', 'Arsenal', 'Liverpool', 'Aston Villa', 'Everton', 'Newcastle', 'Sheffield Utd', 'Luton Town', 'Crystal Palace', 'Nottingham Forest', 'West Ham', 'Burnley', 'Tottenham', 'Manchester City', 'Brentford', 'Brighton', 'Fulham', 'Bournemouth', 'Wolves']
+compare_predictions(teams_2024, actual_standings_2024)
