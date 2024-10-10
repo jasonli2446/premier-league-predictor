@@ -6,12 +6,12 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
 # Step 1: Load the dataset (2024 data removed)
-data = pd.read_csv('pl-tables-1993-2023.csv')
+data = pd.read_csv(r'pl-tables-1993-2023.csv')
 
 # Step 2: Data Preprocessing
-# Define the features (e.g., Wins, Losses, GF, GA, GD) and target (Position)
-features = ['Games played', 'Wins', 'Losses', 'GF', 'GA', 'GD']
-target = 'Position'
+# Define the features
+features = ['played', 'won', 'lost', 'drawn', 'gf', 'ga', 'gd', 'points']
+target = 'position'
 
 X = data[features]  # Feature columns
 y = data[target]    # Target column (Position)
@@ -46,12 +46,17 @@ print("Mean Absolute Error:", mean_absolute_error(y_test, y_pred_rf))
 print("R2 Score:", r2_score(y_test, y_pred_rf))
 
 # Step 7: Function to Predict for a Specified Year
+# Modified predict_for_year function
 def predict_for_year(year):
     if year > 2024 or year < 1993:
         raise ValueError("Year must be between 1993 and 2024.")
     
-    # Assuming data for the year is stored in a CSV file with the naming pattern 'premier_league_YEAR.csv'
-    data_year = pd.read_csv(f'premier_league_{year}.csv')
+    # Filter the data for the specified year from the original dataset
+    data_year = data[data['season_end_year'] == year]
+    
+    if data_year.empty:
+        raise ValueError(f"No data available for the year {year}.")
+    
     X_year = data_year[features]  # Features for the specified year
     
     # Predict standings using Random Forest
@@ -59,12 +64,12 @@ def predict_for_year(year):
     
     # Save the predicted positions to a CSV file
     predicted_df = pd.DataFrame({
-        'Team': data_year['Team'],  # Assuming 'Team' column is in your dataset
+        'team': data_year['team'],
         'Predicted Position': predicted_positions
     })
     output_file = f'predicted_positions_{year}.csv'
     predicted_df.to_csv(output_file, index=False)
     print(f"\nPredicted standings for {year} saved to '{output_file}'")
 
-# Example: Predict for 2024
+# Example: Predict for 2023
 predict_for_year(2024)
