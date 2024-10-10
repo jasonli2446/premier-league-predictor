@@ -6,7 +6,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
 # Step 1: Load the dataset (2024 data removed)
-data = pd.read_csv(r'pl-tables-1993-2023.csv')
+data = pd.read_csv(r'pl-tables-1993-2024.csv')
 
 # Step 2: Data Preprocessing
 # Define the features
@@ -55,7 +55,7 @@ def predict_for_year(year):
     data_year = data[data['season_end_year'] == year]
     
     if data_year.empty:
-        raise ValueError(f"No data available for the year {year}.")
+        raise ValueError(f"No data available for the year {season_end_year}.")
     
     X_year = data_year[features]  # Features for the specified year
     
@@ -64,7 +64,7 @@ def predict_for_year(year):
     
     # Save the predicted positions to a CSV file
     predicted_df = pd.DataFrame({
-        'team': data_year['team'],
+        'Team': data_year['team'],  # Assuming 'team' column is in your dataset
         'Predicted Position': predicted_positions
     })
     output_file = f'predicted_positions_{year}.csv'
