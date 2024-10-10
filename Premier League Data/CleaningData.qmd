@@ -7,6 +7,7 @@ library(readr)
 ```{r readdata}
 getwd()
 df <- read.csv("pl-tables-1993-2024.csv")
+file.path("pl-tables-1993-2024.csv")
 ```
 
 ```{r explore}
@@ -18,7 +19,7 @@ df_filtered <- subset(df, season_end_year != 2024)
 ```
 
 ```{r save filtered data}
-
+write.csv(df_filtered, "pl-tables-1993-2023.csv", row.names = TRUE)
 ```
 
 ```{r}
