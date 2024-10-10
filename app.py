@@ -1,7 +1,7 @@
 # Import necessary libraries
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
@@ -19,23 +19,32 @@ y = data[target]    # Target column (Position)
 # Train-Test Split (80% training, 20% testing)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Model Selection & Training
-
-## Baseline Model: Linear Regression
-linear_model = LinearRegression()
-linear_model.fit(X_train, y_train)
-
-## Advanced Model: Random Forest Regressor
+## Random Forest Regressor
 rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
 rf_model.fit(X_train, y_train)
 
-# Function to Predict for a Specified Year
-def compare_predictions(teams, actual_standings):
-    # Filter the data for seasons that occurred before 2024
-    historical_data = data[data['season_end_year'] < 2024]
+# Function to calculate weighted average
+def weighted_average(team_data, features, current_year):
+    # Assign weights inversely proportional to the difference from the current year
+    team_data['year_diff'] = current_year - team_data['season_end_year']
+    
+    # Calculate weights, giving more weight to recent seasons (e.g., exponentially decay)
+    team_data['weight'] = np.exp(-team_data['year_diff'] / 1.05)  # Adjust the denominator for stronger/weaker decay
+    
+    # Calculate weighted average for each feature
+    weighted_avg = {}
+    for feature in features:
+        weighted_avg[feature] = np.average(team_data[feature], weights=team_data['weight'])
+    
+    return pd.Series(weighted_avg)
+
+# Function to Predict for a Specified Year using weighted averages
+def compare_predictions(teams, actual_standings, prediction_year):
+    # Filter the data for seasons that occurred before the given prediction year
+    historical_data = data[data['season_end_year'] < prediction_year]
 
     if historical_data.empty:
-        raise ValueError("No historical data available before 2024.")
+        raise ValueError(f"No historical data available before {prediction_year}.")
 
     # Train the model again using only the data from previous years
     X_historical = historical_data[features]
@@ -48,16 +57,18 @@ def compare_predictions(teams, actual_standings):
     predictions = []
 
     # Loop through each team for prediction
-    for team in teams:
-        # Get past data for the specified team before 2024
+    for team in teams:           
+
+        # Get past data for the specified team before the prediction year
         team_data = historical_data[historical_data['team'] == team]
 
         if team_data.empty:
-            print(f"No historical data available for {team}, skipping...")
+            predicted_position = 20  # Automatically predict 20th place
+            predictions.append({'Team': team, 'Predicted Position': predicted_position})
             continue
 
-        # Calculate average or trend of past performance metrics for the team
-        trend_features = team_data[features].mean()  # Using average as a proxy for trends
+        # Calculate the weighted average of past performance metrics for the team
+        trend_features = weighted_average(team_data, features, prediction_year)
 
         # Reshape for model prediction (as RF expects 2D input)
         X_team = trend_features.values.reshape(1, -1)
@@ -65,8 +76,15 @@ def compare_predictions(teams, actual_standings):
         # Predict future standing for the team using the trained Random Forest model
         predicted_position = rf_model.predict(X_team)[0]  # Get single prediction
 
-        # Store the result
+        # Store the result before rounding
         predictions.append({'Team': team, 'Predicted Position': predicted_position})
+
+    # Sort predictions by predicted positions (before rounding)
+    predictions.sort(key=lambda x: x['Predicted Position'])
+
+    # Assign unique integer positions based on the sorted predictions
+    for rank, prediction in enumerate(predictions, start=1):
+        prediction['Predicted Position'] = rank
 
     # Convert predictions to DataFrame
     predicted_df = pd.DataFrame(predictions)
@@ -79,7 +97,7 @@ def compare_predictions(teams, actual_standings):
     comparison_df['Position Difference'] = comparison_df['Predicted Position'] - comparison_df['Actual Position']
 
     # Save the comparison results to a CSV file
-    output_file = '2024_comparison_predictions.csv'
+    output_file = f'{prediction_year}_comparison_predictions.csv'
     comparison_df.to_csv(output_file, index=False)
 
     # Calculate the R² score (how well the predictions fit the actual standings)
@@ -89,29 +107,31 @@ def compare_predictions(teams, actual_standings):
     print(f"\nR² value: {r2}")
 
 
-# Actual 2024 standings
+# Actual 2024 standings (Example)
 actual_standings_2024 = [
     {'Team': 'Manchester City', 'Actual Position': 1},
     {'Team': 'Arsenal', 'Actual Position': 2},
     {'Team': 'Liverpool', 'Actual Position': 3},
     {'Team': 'Aston Villa', 'Actual Position': 4},
-    {'Team': 'Tottenham Hotspur', 'Actual Position': 5},
+    {'Team': 'Tottenham', 'Actual Position': 5},
     {'Team': 'Chelsea', 'Actual Position': 6},
-    {'Team': 'Newcastle United', 'Actual Position': 7},
-    {'Team': 'Manchester United', 'Actual Position': 8},
-    {'Team': 'West Ham United', 'Actual Position': 9},
+    {'Team': 'Newcastle Utd', 'Actual Position': 7},
+    {'Team': 'Manchester Utd', 'Actual Position': 8},
+    {'Team': 'West Ham', 'Actual Position': 9},
     {'Team': 'Crystal Palace', 'Actual Position': 10},
-    {'Team': 'Brighton & Hove Albion', 'Actual Position': 11},
-    {'Team': 'AFC Bournemouth', 'Actual Position': 12},
+    {'Team': 'Brighton', 'Actual Position': 11},
+    {'Team': 'Bournemouth', 'Actual Position': 12},
     {'Team': 'Fulham', 'Actual Position': 13},
-    {'Team': 'Wolverhampton Wanderers', 'Actual Position': 14},
+    {'Team': 'Wolves', 'Actual Position': 14},
     {'Team': 'Everton', 'Actual Position': 15},
     {'Team': 'Brentford', 'Actual Position': 16},
     {'Team': 'Nottingham Forest', 'Actual Position': 17},
     {'Team': 'Luton Town', 'Actual Position': 18},
     {'Team': 'Burnley', 'Actual Position': 19},
-    {'Team': 'Sheffield United', 'Actual Position': 20},
+    {'Team': 'Sheffield Utd', 'Actual Position': 20},
 ]
 
-teams_2024 = ['Manchester Utd', 'Chelsea', 'Arsenal', 'Liverpool', 'Aston Villa', 'Everton', 'Newcastle', 'Sheffield Utd', 'Luton Town', 'Crystal Palace', 'Nottingham Forest', 'West Ham', 'Burnley', 'Tottenham', 'Manchester City', 'Brentford', 'Brighton', 'Fulham', 'Bournemouth', 'Wolves']
-compare_predictions(teams_2024, actual_standings_2024)
+teams_2024 = ['Manchester City', 'Arsenal', 'Liverpool', 'Aston Villa', 'Tottenham', 'Chelsea', 'Newcastle Utd', 'Manchester Utd', 'West Ham', 'Crystal Palace', 'Brighton', 'Bournemouth', 'Fulham', 'Wolves', 'Everton', 'Brentford', 'Nottingham Forest', 'Luton Town', 'Burnley', 'Sheffield Utd']
+
+# Call function to compare predictions for 2024 using weighted averages
+compare_predictions(teams_2024, actual_standings_2024, 2024)
