@@ -71,5 +71,4 @@ def predict_for_year(year):
     predicted_df.to_csv(output_file, index=False)
     print(f"\nPredicted standings for {year} saved to '{output_file}'")
 
-# Example: Predict for 2023
 predict_for_year(2024)
