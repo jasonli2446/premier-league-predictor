@@ -5,8 +5,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
-# Step 1: Load the dataset (assumes you've already pre-processed it to remove 2024 data if necessary)
-data = pd.read_csv('premier_league_data.csv')
+# Step 1: Load the dataset (2024 data removed)
+data = pd.read_csv('pl-tables-1993-2023.csv')
 
 # Step 2: Data Preprocessing
 # Define the features (e.g., Wins, Losses, GF, GA, GD) and target (Position)
