@@ -14,9 +14,12 @@ warnings.filterwarnings('ignore', category=UserWarning)
 data = pd.read_csv(r'pl-tables-1993-2023.csv')
 
 # Data Preprocessing
-# Define the features
+# Define the features (now includes recent form analysis)
 features = ['played', 'won', 'lost', 'drawn', 'gf', 'ga', 'gd', 'points']
 target = 'position'
+
+# Extended features will include recent_form_score when making predictions
+extended_features = features + ['recent_form_score']
 
 X = data[features]  # Feature columns
 y = data[target]    # Target column (Position)
@@ -28,7 +31,7 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
 rf_model.fit(X_train, y_train)
 
-# Function to calculate weighted average
+# Function to calculate weighted average with recent form
 def weighted_average(team_data, features, current_year):
     # Create a copy to avoid SettingWithCopyWarning
     team_data = team_data.copy()
@@ -44,7 +47,39 @@ def weighted_average(team_data, features, current_year):
     for feature in features:
         weighted_avg[feature] = np.average(team_data[feature], weights=team_data['weight'])
     
+    # Add recent form score as a new feature
+    recent_form = calculate_recent_form_score(team_data, current_year)
+    weighted_avg['recent_form_score'] = recent_form
+    
     return pd.Series(weighted_avg)
+
+# Function to calculate recent form analysis
+def calculate_recent_form_score(team_data, current_year, last_n_seasons=3):
+    """
+    Calculate performance trend in most recent seasons to capture momentum.
+    Returns a form score indicating if team is improving (+) or declining (-).
+    """
+    # Get data from recent seasons only
+    recent_data = team_data[team_data['season_end_year'] >= (current_year - last_n_seasons)]
+    
+    if len(recent_data) < 2:
+        return 0  # Not enough data to calculate trend
+    
+    # Sort by year to ensure proper trend calculation
+    recent_data = recent_data.sort_values('season_end_year')
+    
+    # Calculate trend in points over recent seasons (slope of improvement)
+    if len(recent_data) >= 2:
+        points_trend = np.polyfit(recent_data['season_end_year'], recent_data['points'], 1)[0]
+        
+        # Also consider position trend (negative because lower position = better)
+        position_trend = -np.polyfit(recent_data['season_end_year'], recent_data['position'], 1)[0]
+        
+        # Combine both trends (points trend weighted more heavily)
+        form_score = (points_trend * 0.7) + (position_trend * 0.3)
+        return form_score
+    
+    return 0
 
 # Function to Predict for a Specified Year using weighted averages
 def compare_predictions(teams, actual_standings, prediction_year):
@@ -76,14 +111,24 @@ def compare_predictions(teams, actual_standings, prediction_year):
             continue        # Calculate the weighted average of past performance metrics for the team
         trend_features = weighted_average(team_data, features, prediction_year)
 
-        # Use the original features for prediction (NO RECENT FORM)
-        X_team = trend_features.values.reshape(1, -1)
+        # Use only the original features for prediction (exclude recent_form_score for model)
+        X_team = trend_features[features].values.reshape(1, -1)
 
         # Predict future standing for the team using the trained Random Forest model
         predicted_position = rf_model.predict(X_team)[0]  # Get single prediction
+          # Apply recent form adjustment to the prediction
+        form_score = trend_features['recent_form_score']
         
-        # Store the result (NO FORM ADJUSTMENT)
-        predictions.append({'Team': team, 'Predicted Position': predicted_position})
+        # Adjust prediction based on recent form (positive form = better position = lower number)
+        # Use a smaller adjustment factor to avoid over-correction
+        form_adjustment = -form_score * 0.15  # Reduced from 0.5 to 0.15
+        adjusted_prediction = predicted_position + form_adjustment
+        
+        # Ensure prediction stays within reasonable bounds (1-20)
+        adjusted_prediction = max(1, min(20, adjusted_prediction))
+        
+        # Store the adjusted result
+        predictions.append({'Team': team, 'Predicted Position': adjusted_prediction})
 
     # Sort predictions by predicted positions (before rounding)
     predictions.sort(key=lambda x: x['Predicted Position'])
@@ -105,12 +150,26 @@ def compare_predictions(teams, actual_standings, prediction_year):
     # Save the comparison results to a CSV file
     output_file = f'{prediction_year}_comparison_predictions.csv'
     comparison_df.to_csv(output_file, index=False)    # Calculate the R² score (how well the predictions fit the actual standings)
-    r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])    # Display results
+    r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])
+      # Display results
     print("=" * 60)
-    print(f"PREMIER LEAGUE {prediction_year} PREDICTION RESULTS (ORIGINAL)")
+    print(f"PREMIER LEAGUE {prediction_year} PREDICTION RESULTS (WITH RECENT FORM)")
     print("=" * 60)
     print(f"\nModel Accuracy (R² Score): {r2:.3f}")
     print(f"Results saved to: {output_file}")
+    
+    # Show recent form analysis for some teams
+    print("\nRECENT FORM ANALYSIS:")
+    print("-" * 30)
+    sample_teams = ['Aston Villa', 'Manchester Utd', 'Brentford', 'Arsenal']
+    for team in sample_teams:
+        if team in teams:
+            team_data = historical_data[historical_data['team'] == team]
+            if not team_data.empty:
+                form_score = calculate_recent_form_score(team_data, prediction_year)
+                trend = "Improving ↗" if form_score > 1 else "Declining ↘" if form_score < -1 else "Stable →"
+                print(f"• {team:<18} Form Score: {form_score:+.2f} ({trend})")
+    
     print("\nTOP PREDICTIONS vs ACTUAL:")
     print("-" * 45)
     
