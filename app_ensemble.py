@@ -128,6 +128,99 @@ def calculate_recent_form_score(team_data, current_year, last_n_seasons=3):
     
     return 0
 
+# Cross-validation function for ensemble time-series validation
+def cross_validate_ensemble_time_series(data, features, target, prediction_year):
+    """
+    Perform time-series cross-validation using ensemble approach.
+    Returns average CV score across multiple time periods.
+    """
+    # Define validation periods
+    cv_periods = [
+        {'train_end': 2013, 'test_start': 2014, 'test_end': 2016},
+        {'train_end': 2016, 'test_start': 2017, 'test_end': 2019},
+        {'train_end': 2019, 'test_start': 2020, 'test_end': 2023}
+    ]
+    
+    cv_scores = []
+    
+    for period in cv_periods:
+        # Create training and testing sets based on time periods
+        train_data = data[data['season_end_year'] <= period['train_end']]
+        test_data = data[(data['season_end_year'] >= period['test_start']) & 
+                        (data['season_end_year'] <= period['test_end'])]
+        
+        if len(train_data) == 0 or len(test_data) == 0:
+            continue
+            
+        # Prepare training data
+        X_train_cv = train_data[features]
+        y_train_cv = train_data[target]
+        
+        # Train ensemble models on this fold
+        rf_cv = RandomForestRegressor(n_estimators=100, random_state=42)
+        gb_cv = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
+        lr_cv = LinearRegression()
+        
+        rf_cv.fit(X_train_cv, y_train_cv)
+        gb_cv.fit(X_train_cv, y_train_cv)
+        lr_cv.fit(X_train_cv, y_train_cv)
+        
+        # Calculate weights for this fold
+        X_val = train_data[features].iloc[-len(train_data)//4:]  # Use last 25% of training as validation
+        y_val = train_data[target].iloc[-len(train_data)//4:]
+        
+        rf_val_pred = rf_cv.predict(X_val)
+        gb_val_pred = gb_cv.predict(X_val)
+        lr_val_pred = lr_cv.predict(X_val)
+        
+        rf_val_score = max(0.01, r2_score(y_val, rf_val_pred))  # Prevent negative weights
+        gb_val_score = max(0.01, r2_score(y_val, gb_val_pred))
+        lr_val_score = max(0.01, r2_score(y_val, lr_val_pred))
+        
+        total_score = rf_val_score + gb_val_score + lr_val_score
+        rf_w = rf_val_score / total_score
+        gb_w = gb_val_score / total_score
+        lr_w = lr_val_score / total_score
+        
+        # Get unique teams from test period
+        test_teams = test_data['team'].unique()
+        
+        # Make ensemble predictions for each team in test period
+        fold_predictions = []
+        fold_actuals = []
+        
+        for team in test_teams:
+            team_test_data = test_data[test_data['team'] == team]
+            
+            for _, row in team_test_data.iterrows():
+                # Get historical data for this team (before the test year)
+                team_historical = train_data[train_data['team'] == team]
+                
+                if len(team_historical) == 0:
+                    continue
+                
+                # Calculate weighted average for this team
+                trend_features = weighted_average(team_historical, features, row['season_end_year'])
+                X_team = trend_features[features].values.reshape(1, -1)
+                
+                # Make ensemble prediction
+                ensemble_pred, _, _, _ = ensemble_predict(X_team, rf_cv, gb_cv, lr_cv, rf_w, gb_w, lr_w)
+                
+                # Apply recent form adjustment
+                form_score = trend_features['recent_form_score']
+                form_adjustment = -form_score * 0.05
+                adjusted_prediction = ensemble_pred + form_adjustment
+                adjusted_prediction = max(1, min(20, adjusted_prediction))
+                
+                fold_predictions.append(adjusted_prediction)
+                fold_actuals.append(row[target])
+        
+        if len(fold_predictions) > 0:
+            fold_score = r2_score(fold_actuals, fold_predictions)
+            cv_scores.append(fold_score)
+    
+    return np.mean(cv_scores) if cv_scores else 0.0
+
 # Function to make ensemble predictions
 def ensemble_predict(X_team, rf_model, gb_model, lr_model, rf_weight, gb_weight, lr_weight):
     """
@@ -236,14 +329,17 @@ def compare_predictions(teams, actual_standings, prediction_year):
     # Save the comparison results to a CSV file
     output_file = f'{prediction_year}_comparison_predictions.csv'
     comparison_df.to_csv(output_file, index=False)
-    
-    # Calculate the R² score
+      # Calculate the R² score
     r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])
+    
+    # Perform cross-validation
+    cv_score = cross_validate_ensemble_time_series(data, features, target, prediction_year)
     
     print("\n" + "=" * 60)
     print("PREMIER LEAGUE 2024 PREDICTION RESULTS (ENSEMBLE + RECENT FORM)")
     print("=" * 60)
     print(f"Model Accuracy (R² Score): {r2:.3f}")
+    print(f"Cross-Validation Score: {cv_score:.3f}")
     print("Results saved to: 2024_comparison_predictions.csv")
     
     # Show ensemble analysis for disagreeing models

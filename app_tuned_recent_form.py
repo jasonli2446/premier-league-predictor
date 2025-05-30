@@ -22,7 +22,78 @@ extended_features = features + ['recent_form_score']
 X = data[features]  # Feature columns
 y = data[target]    # Target column (Position)
 
-# Train-Test Split (80% training, 20% testing)
+# Cross-validation function for time-series validation
+def cross_validate_time_series(data, features, target, prediction_year):
+    """
+    Perform time-series cross-validation using chronological splits.
+    Returns average CV score across multiple time periods.
+    """
+    # Define validation periods (train on earlier data, test on later)
+    cv_periods = [
+        {'train_end': 2013, 'test_start': 2014, 'test_end': 2016},
+        {'train_end': 2016, 'test_start': 2017, 'test_end': 2019},
+        {'train_end': 2019, 'test_start': 2020, 'test_end': 2023}
+    ]
+    
+    cv_scores = []
+    
+    for period in cv_periods:
+        # Create training and testing sets based on time periods
+        train_data = data[data['season_end_year'] <= period['train_end']]
+        test_data = data[(data['season_end_year'] >= period['test_start']) & 
+                        (data['season_end_year'] <= period['test_end'])]
+        
+        if len(train_data) == 0 or len(test_data) == 0:
+            continue
+            
+        # Prepare training data
+        X_train_cv = train_data[features]
+        y_train_cv = train_data[target]
+        
+        # Train model on this fold
+        rf_cv = RandomForestRegressor(n_estimators=100, random_state=42)
+        rf_cv.fit(X_train_cv, y_train_cv)
+        
+        # Get unique teams from test period
+        test_teams = test_data['team'].unique()
+        
+        # Make predictions for each team in test period
+        fold_predictions = []
+        fold_actuals = []
+        
+        for team in test_teams:
+            team_test_data = test_data[test_data['team'] == team]
+            
+            for _, row in team_test_data.iterrows():
+                # Get historical data for this team (before the test year)
+                team_historical = train_data[train_data['team'] == team]
+                
+                if len(team_historical) == 0:
+                    continue
+                
+                # Calculate weighted average for this team
+                trend_features = weighted_average(team_historical, features, row['season_end_year'])
+                X_team = trend_features[features].values.reshape(1, -1)
+                
+                # Make prediction
+                predicted_pos = rf_cv.predict(X_team)[0]
+                
+                # Apply recent form adjustment
+                form_score = trend_features['recent_form_score']
+                form_adjustment = -form_score * 0.05
+                adjusted_prediction = predicted_pos + form_adjustment
+                adjusted_prediction = max(1, min(20, adjusted_prediction))
+                
+                fold_predictions.append(adjusted_prediction)
+                fold_actuals.append(row[target])
+        
+        if len(fold_predictions) > 0:
+            fold_score = r2_score(fold_actuals, fold_predictions)
+            cv_scores.append(fold_score)
+    
+    return np.mean(cv_scores) if cv_scores else 0.0
+
+# Train final model on all historical data
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 ## Random Forest Regressor
@@ -159,14 +230,17 @@ def compare_predictions(teams, actual_standings, prediction_year):
     # Save the comparison results to a CSV file
     output_file = f'{prediction_year}_comparison_predictions.csv'
     comparison_df.to_csv(output_file, index=False)
-    
-    # Calculate the R² score (how well the predictions fit the actual standings)
+      # Calculate the R² score (how well the predictions fit the actual standings)
     r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])
+    
+    # Perform cross-validation
+    cv_score = cross_validate_time_series(data, features, target, prediction_year)
     
     print("=" * 60)
     print("PREMIER LEAGUE 2024 PREDICTION RESULTS (TUNED RECENT FORM)")
     print("=" * 60)
     print(f"Model Accuracy (R² Score): {r2:.3f}")
+    print(f"Cross-Validation Score: {cv_score:.3f}")
     print("Results saved to: 2024_comparison_predictions.csv")
     
     # Show recent form analysis
