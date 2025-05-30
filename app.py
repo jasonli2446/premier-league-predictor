@@ -2,7 +2,8 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import warnings
 
@@ -24,9 +25,48 @@ y = data[target]    # Target column (Position)
 # Train-Test Split (80% training, 20% testing)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-## Random Forest Regressor
+## Initialize Multiple Models for Ensemble
+# Model 1: Random Forest (our current champion)
 rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+
+# Model 2: Gradient Boosting (learns from mistakes iteratively)
+gb_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
+
+# Model 3: Linear Regression (simple but effective baseline)
+lr_model = LinearRegression()
+
+# Train all models
+print("Training ensemble models...")
 rf_model.fit(X_train, y_train)
+gb_model.fit(X_train, y_train)
+lr_model.fit(X_train, y_train)
+
+# Test ensemble performance on validation set
+rf_pred = rf_model.predict(X_test)
+gb_pred = gb_model.predict(X_test)
+lr_pred = lr_model.predict(X_test)
+
+# Calculate individual model scores for weight determination
+rf_score = r2_score(y_test, rf_pred)
+gb_score = r2_score(y_test, gb_pred)
+lr_score = r2_score(y_test, lr_pred)
+
+print(f"Individual Model Performance on Validation Set:")
+print(f"Random Forest: {rf_score:.3f}")
+print(f"Gradient Boosting: {gb_score:.3f}")
+print(f"Linear Regression: {lr_score:.3f}")
+
+# Calculate ensemble weights based on performance
+total_score = rf_score + gb_score + lr_score
+rf_weight = rf_score / total_score
+gb_weight = gb_score / total_score
+lr_weight = lr_score / total_score
+
+print(f"Ensemble Weights:")
+print(f"Random Forest: {rf_weight:.3f}")
+print(f"Gradient Boosting: {gb_weight:.3f}")
+print(f"Linear Regression: {lr_weight:.3f}")
+print("All models trained successfully!\n")
 
 # Function to calculate weighted average
 def weighted_average(team_data, features, current_year):
@@ -38,13 +78,27 @@ def weighted_average(team_data, features, current_year):
     
     # Calculate weights, giving more weight to recent seasons (e.g., exponentially decay)
     team_data['weight'] = np.exp(-team_data['year_diff'] / 1.05)  # Adjust the denominator for stronger/weaker decay
-    
-    # Calculate weighted average for each feature
+      # Calculate weighted average for each feature
     weighted_avg = {}
     for feature in features:
         weighted_avg[feature] = np.average(team_data[feature], weights=team_data['weight'])
     
     return pd.Series(weighted_avg)
+
+# Function to make ensemble predictions
+def ensemble_predict(X_team, rf_model, gb_model, lr_model, rf_weight, gb_weight, lr_weight):
+    """
+    Make prediction using weighted ensemble of all three models
+    """
+    # Get predictions from all models
+    rf_pred = rf_model.predict(X_team)[0]
+    gb_pred = gb_model.predict(X_team)[0]
+    lr_pred = lr_model.predict(X_team)[0]
+    
+    # Calculate weighted ensemble prediction
+    ensemble_pred = (rf_pred * rf_weight) + (gb_pred * gb_weight) + (lr_pred * lr_weight)
+    
+    return ensemble_pred, rf_pred, gb_pred, lr_pred
 
 # Function to Predict for a Specified Year using weighted averages
 def compare_predictions(teams, actual_standings, prediction_year):
@@ -52,17 +106,18 @@ def compare_predictions(teams, actual_standings, prediction_year):
     historical_data = data[data['season_end_year'] < prediction_year]
 
     if historical_data.empty:
-        raise ValueError(f"No historical data available before {prediction_year}.")
-
-    # Train the model again using only the data from previous years
+        raise ValueError(f"No historical data available before {prediction_year}.")    # Train the model again using only the data from previous years
     X_historical = historical_data[features]
     y_historical = historical_data[target]
 
-    # Re-train the model using all previous data
+    # Re-train all ensemble models using historical data
     rf_model.fit(X_historical, y_historical)
+    gb_model.fit(X_historical, y_historical)
+    lr_model.fit(X_historical, y_historical)
 
     # Create an empty list to store predicted positions
     predictions = []
+    ensemble_details = []
 
     # Loop through each team for prediction
     for team in teams:           
@@ -76,14 +131,28 @@ def compare_predictions(teams, actual_standings, prediction_year):
             continue        # Calculate the weighted average of past performance metrics for the team
         trend_features = weighted_average(team_data, features, prediction_year)
 
-        # Use the original features for prediction (NO RECENT FORM)
+        # Use the original features for prediction
         X_team = trend_features.values.reshape(1, -1)
 
-        # Predict future standing for the team using the trained Random Forest model
-        predicted_position = rf_model.predict(X_team)[0]  # Get single prediction
+        # Get ensemble prediction and individual model predictions
+        ensemble_pred, rf_pred, gb_pred, lr_pred = ensemble_predict(
+            X_team, rf_model, gb_model, lr_model, rf_weight, gb_weight, lr_weight
+        )
         
-        # Store the result (NO FORM ADJUSTMENT)
-        predictions.append({'Team': team, 'Predicted Position': predicted_position})
+        # Store ensemble details for analysis
+        model_variance = np.std([rf_pred, gb_pred, lr_pred])
+        if model_variance > 2:  # Show cases where models disagree significantly
+            ensemble_details.append({
+                'team': team,
+                'rf_pred': rf_pred,
+                'gb_pred': gb_pred,
+                'lr_pred': lr_pred,
+                'ensemble': ensemble_pred,
+                'variance': model_variance
+            })
+        
+        # Store the ensemble result
+        predictions.append({'Team': team, 'Predicted Position': ensemble_pred})
 
     # Sort predictions by predicted positions (before rounding)
     predictions.sort(key=lambda x: x['Predicted Position'])
@@ -107,10 +176,18 @@ def compare_predictions(teams, actual_standings, prediction_year):
     comparison_df.to_csv(output_file, index=False)    # Calculate the R² score (how well the predictions fit the actual standings)
     r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])    # Display results
     print("=" * 60)
-    print(f"PREMIER LEAGUE {prediction_year} PREDICTION RESULTS (ORIGINAL)")
+    print(f"PREMIER LEAGUE {prediction_year} PREDICTION RESULTS (ENSEMBLE)")
     print("=" * 60)
-    print(f"\nModel Accuracy (R² Score): {r2:.3f}")
+    print(f"Model Accuracy (R² Score): {r2:.3f}")
     print(f"Results saved to: {output_file}")
+      # Show ensemble analysis for disagreeing models
+    if ensemble_details:
+        print(f"\nENSEMBLE MODEL ANALYSIS:")
+        print("-" * 30)
+        print("Teams where models disagreed significantly:")
+        for detail in ensemble_details[:5]:  # Show top 5
+            print(f"• {detail['team']:<17} RF:{detail['rf_pred']:4.1f} GB:{detail['gb_pred']:4.1f} LR:{detail['lr_pred']:4.1f} → Ens:{detail['ensemble']:4.1f}")
+    
     print("\nTOP PREDICTIONS vs ACTUAL:")
     print("-" * 45)
     
