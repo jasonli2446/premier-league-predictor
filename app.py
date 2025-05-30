@@ -4,6 +4,11 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
+import warnings
+
+# Suppress pandas and sklearn warnings for cleaner output
+warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 
 # Load the dataset (2024 data removed)
 data = pd.read_csv(r'pl-tables-1993-2023.csv')
@@ -25,6 +30,9 @@ rf_model.fit(X_train, y_train)
 
 # Function to calculate weighted average
 def weighted_average(team_data, features, current_year):
+    # Create a copy to avoid SettingWithCopyWarning
+    team_data = team_data.copy()
+    
     # Assign weights inversely proportional to the difference from the current year
     team_data['year_diff'] = current_year - team_data['season_end_year']
     
@@ -98,13 +106,35 @@ def compare_predictions(teams, actual_standings, prediction_year):
 
     # Save the comparison results to a CSV file
     output_file = f'{prediction_year}_comparison_predictions.csv'
-    comparison_df.to_csv(output_file, index=False)
-
-    # Calculate the R² score (how well the predictions fit the actual standings)
+    comparison_df.to_csv(output_file, index=False)    # Calculate the R² score (how well the predictions fit the actual standings)
     r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])
     
-    # Output R² score
-    print(f"\nR² value: {r2}")
+    # Display results
+    print("=" * 60)
+    print(f"PREMIER LEAGUE {prediction_year} PREDICTION RESULTS")
+    print("=" * 60)
+    print(f"\nModel Accuracy (R² Score): {r2:.3f}")
+    print(f"Results saved to: {output_file}")
+    print("\nTOP PREDICTIONS vs ACTUAL:")
+    print("-" * 45)
+    
+    # Show top 10 teams comparison
+    top_10 = comparison_df.head(10)
+    for _, row in top_10.iterrows():
+        diff = row['Position Difference']
+        status = "✓" if abs(diff) <= 1 else "✗" if abs(diff) >= 3 else "~"
+        print(f"{status} {row['Team']:<18} Pred: {row['Predicted Position']:2d}  Actual: {row['Actual Position']:2d}  (Diff: {diff:+d})")
+    
+    # Show biggest prediction errors
+    print("\nBIGGEST PREDICTION ERRORS:")
+    print("-" * 30)
+    biggest_errors = comparison_df.reindex(comparison_df['Position Difference'].abs().sort_values(ascending=False).index).head(3)
+    for _, row in biggest_errors.iterrows():
+        diff = row['Position Difference']
+        print(f"• {row['Team']:<18} Off by {abs(diff)} positions (Predicted {row['Predicted Position']}, Actual {row['Actual Position']})")
+    
+    print(f"\n{'='*60}")
+    return comparison_df
 
 
 # Actual 2024 standings (Example)
