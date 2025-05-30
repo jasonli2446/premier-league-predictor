@@ -22,9 +22,6 @@ target = 'position'
 X = data[features]  # Feature columns
 y = data[target]    # Target column (Position)
 
-# Train-Test Split (80% training, 20% testing)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
 ## Initialize Multiple Models for Ensemble
 # Model 1: Random Forest (our current champion)
 rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -35,37 +32,123 @@ gb_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, random
 # Model 3: Linear Regression (simple but effective baseline)
 lr_model = LinearRegression()
 
-# Train all models
-print("Training ensemble models...")
-rf_model.fit(X_train, y_train)
-gb_model.fit(X_train, y_train)
-lr_model.fit(X_train, y_train)
+# Function to perform time-series cross-validation
+def time_series_cross_validation():
+    """
+    Perform time-series cross-validation using chronological splits
+    Returns average performance scores and optimal ensemble weights
+    """
+    print("Performing Cross-Season Validation...")
+    print("=" * 50)    # Define time periods for cross-validation (using 3-year test windows)
+    cv_splits = [
+        {'train_end': 2010, 'test_start': 2011, 'test_end': 2013},
+        {'train_end': 2013, 'test_start': 2014, 'test_end': 2016},
+        {'train_end': 2016, 'test_start': 2017, 'test_end': 2019},
+        {'train_end': 2019, 'test_start': 2020, 'test_end': 2023},
+    ]
+    
+    all_rf_scores = []
+    all_gb_scores = []
+    all_lr_scores = []
+    all_ensemble_scores = []
+    
+    for i, split in enumerate(cv_splits, 1):
+        print(f"Split {i}: Train [1993-{split['train_end']}] → Test [{split['test_start']}-{split['test_end']}]")
+        
+        # Create train/test splits based on years
+        train_data = data[data['season_end_year'] <= split['train_end']]
+        test_data = data[(data['season_end_year'] >= split['test_start']) & 
+                        (data['season_end_year'] <= split['test_end'])]
+        
+        if len(train_data) == 0 or len(test_data) == 0:
+            print(f"  ⚠️  Insufficient data for split {i}")
+            continue
+            
+        # Prepare features and targets
+        X_train = train_data[features]
+        y_train = train_data[target]
+        X_test = test_data[features]
+        y_test = test_data[target]
+        
+        # Train all models
+        rf_temp = RandomForestRegressor(n_estimators=100, random_state=42)
+        gb_temp = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
+        lr_temp = LinearRegression()
+        
+        rf_temp.fit(X_train, y_train)
+        gb_temp.fit(X_train, y_train)
+        lr_temp.fit(X_train, y_train)
+        
+        # Make predictions
+        rf_pred = rf_temp.predict(X_test)
+        gb_pred = gb_temp.predict(X_test)
+        lr_pred = lr_temp.predict(X_test)
+        
+        # Calculate individual scores
+        rf_score = r2_score(y_test, rf_pred)
+        gb_score = r2_score(y_test, gb_pred)
+        lr_score = r2_score(y_test, lr_pred)
+        
+        # Calculate ensemble weights for this split
+        if rf_score > 0 and gb_score > 0 and lr_score > 0:
+            total_score = rf_score + gb_score + lr_score
+            rf_weight_temp = rf_score / total_score
+            gb_weight_temp = gb_score / total_score
+            lr_weight_temp = lr_score / total_score
+            
+            # Create ensemble prediction
+            ensemble_pred = (rf_pred * rf_weight_temp) + (gb_pred * gb_weight_temp) + (lr_pred * lr_weight_temp)
+            ensemble_score = r2_score(y_test, ensemble_pred)
+        else:
+            ensemble_score = max(rf_score, gb_score, lr_score)  # Fallback to best individual model
+        
+        # Store scores
+        all_rf_scores.append(rf_score)
+        all_gb_scores.append(gb_score)
+        all_lr_scores.append(lr_score)
+        all_ensemble_scores.append(ensemble_score)
+        
+        print(f"  RF: {rf_score:.3f} | GB: {gb_score:.3f} | LR: {lr_score:.3f} | Ensemble: {ensemble_score:.3f}")
+    
+    # Calculate averages
+    avg_rf = np.mean(all_rf_scores)
+    avg_gb = np.mean(all_gb_scores)
+    avg_lr = np.mean(all_lr_scores)
+    avg_ensemble = np.mean(all_ensemble_scores)
+    
+    print("-" * 50)
+    print(f"Average Cross-Validation Scores:")
+    print(f"Random Forest: {avg_rf:.3f} (±{np.std(all_rf_scores):.3f})")
+    print(f"Gradient Boosting: {avg_gb:.3f} (±{np.std(all_gb_scores):.3f})")
+    print(f"Linear Regression: {avg_lr:.3f} (±{np.std(all_lr_scores):.3f})")
+    print(f"Ensemble: {avg_ensemble:.3f} (±{np.std(all_ensemble_scores):.3f})")
+    
+    # Calculate optimal ensemble weights based on cross-validation
+    if avg_rf > 0 and avg_gb > 0 and avg_lr > 0:
+        total_avg = avg_rf + avg_gb + avg_lr
+        optimal_rf_weight = avg_rf / total_avg
+        optimal_gb_weight = avg_gb / total_avg
+        optimal_lr_weight = avg_lr / total_avg
+    else:
+        # Fallback to equal weights
+        optimal_rf_weight = optimal_gb_weight = optimal_lr_weight = 1/3
+    
+    print(f"\nOptimal Ensemble Weights (based on CV):")
+    print(f"Random Forest: {optimal_rf_weight:.3f}")
+    print(f"Gradient Boosting: {optimal_gb_weight:.3f}")
+    print(f"Linear Regression: {optimal_lr_weight:.3f}")
+    print("=" * 50 + "\n")
+    
+    return optimal_rf_weight, optimal_gb_weight, optimal_lr_weight, avg_ensemble
 
-# Test ensemble performance on validation set
-rf_pred = rf_model.predict(X_test)
-gb_pred = gb_model.predict(X_test)
-lr_pred = lr_model.predict(X_test)
+# Perform cross-validation and get optimal weights
+rf_weight, gb_weight, lr_weight, cv_ensemble_score = time_series_cross_validation()
 
-# Calculate individual model scores for weight determination
-rf_score = r2_score(y_test, rf_pred)
-gb_score = r2_score(y_test, gb_pred)
-lr_score = r2_score(y_test, lr_pred)
-
-print(f"Individual Model Performance on Validation Set:")
-print(f"Random Forest: {rf_score:.3f}")
-print(f"Gradient Boosting: {gb_score:.3f}")
-print(f"Linear Regression: {lr_score:.3f}")
-
-# Calculate ensemble weights based on performance
-total_score = rf_score + gb_score + lr_score
-rf_weight = rf_score / total_score
-gb_weight = gb_score / total_score
-lr_weight = lr_score / total_score
-
-print(f"Ensemble Weights:")
-print(f"Random Forest: {rf_weight:.3f}")
-print(f"Gradient Boosting: {gb_weight:.3f}")
-print(f"Linear Regression: {lr_weight:.3f}")
+# Train final models on all available data for predictions
+print("Training final ensemble models on all historical data...")
+rf_model.fit(X, y)
+gb_model.fit(X, y)
+lr_model.fit(X, y)
 print("All models trained successfully!\n")
 
 # Function to calculate weighted average
@@ -176,11 +259,13 @@ def compare_predictions(teams, actual_standings, prediction_year):
     comparison_df.to_csv(output_file, index=False)    # Calculate the R² score (how well the predictions fit the actual standings)
     r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])    # Display results
     print("=" * 60)
-    print(f"PREMIER LEAGUE {prediction_year} PREDICTION RESULTS (ENSEMBLE)")
+    print(f"PREMIER LEAGUE {prediction_year} PREDICTION RESULTS (ENSEMBLE + CV)")
     print("=" * 60)
-    print(f"Model Accuracy (R² Score): {r2:.3f}")
+    print(f"Current Model Accuracy (R² Score): {r2:.3f}")
+    print(f"Cross-Validation Ensemble Score: {cv_ensemble_score:.3f}")
     print(f"Results saved to: {output_file}")
-      # Show ensemble analysis for disagreeing models
+    
+    # Show ensemble analysis for disagreeing models
     if ensemble_details:
         print(f"\nENSEMBLE MODEL ANALYSIS:")
         print("-" * 30)
