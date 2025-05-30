@@ -140,10 +140,10 @@ def calculate_recent_form_score(team_data, current_year, last_n_seasons=3):
     Calculate performance trend in most recent seasons to capture momentum.
     Returns a form score indicating if team is improving (+) or declining (-).
     Improved version with better scaling and normalization.
+    Handles polyfit errors gracefully for bootstrap robustness.
     """
     # Get data from recent seasons only
     recent_data = team_data[team_data['season_end_year'] >= (current_year - last_n_seasons)]
-    
     if len(recent_data) < 2:
         return 0  # Not enough data to calculate trend
     
@@ -152,12 +152,15 @@ def calculate_recent_form_score(team_data, current_year, last_n_seasons=3):
     
     # Calculate trend in points over recent seasons (slope of improvement)
     if len(recent_data) >= 2:
-        # Normalize years to start from 0 for better polynomial fitting
         years_normalized = recent_data['season_end_year'] - recent_data['season_end_year'].min()
-        
-        # Calculate both trends but with better scaling
-        points_trend = np.polyfit(years_normalized, recent_data['points'], 1)[0]
-        position_trend = -np.polyfit(years_normalized, recent_data['position'], 1)[0]  # Negative because lower position = better
+        try:
+            # If all years or points are constant, polyfit will fail; catch and return 0
+            if np.all(years_normalized == 0) or np.all(recent_data['points'] == recent_data['points'].iloc[0]) or np.all(recent_data['position'] == recent_data['position'].iloc[0]):
+                return 0
+            points_trend = np.polyfit(years_normalized, recent_data['points'], 1)[0]
+            position_trend = -np.polyfit(years_normalized, recent_data['position'], 1)[0]  # Negative because lower position = better
+        except Exception:
+            return 0
         
         # Scale the trends to reasonable ranges
         # Points typically range 0-100, positions 1-20
@@ -369,89 +372,73 @@ def compare_predictions(teams, actual_standings, prediction_year):
 
     predictions = []
     recent_form_details = []
+    confidence_intervals = []
 
-    for team in teams:
-        # Get historical data for the specific team
+    print(f"Calculating confidence intervals using bootstrap sampling...")
+    for i, team in enumerate(teams, 1):
+        print(f"Processing {team} ({i}/{len(teams)})...", end=' ')
         team_data = historical_data[historical_data['team'] == team]
-
         if team_data.empty:
             print(f"Warning: No historical data found for team '{team}'. Skipping prediction.")
             continue
-
-        # Calculate the weighted average of past performance metrics for the team
+        # Calculate confidence intervals using bootstrap
+        ci_results = bootstrap_confidence_interval_recent_form(
+            historical_data, team_data, features, prediction_year, n_bootstrap=300, confidence_level=0.95
+        )
         trend_features = weighted_average(team_data, features, prediction_year)
-
-        # Use only the original features for prediction (exclude recent_form_score for model)
         X_team = trend_features[features].values.reshape(1, -1)
-
-        # Predict future standing for the team using the trained Random Forest model
-        predicted_position = rf_model.predict(X_team)[0]  # Get single prediction
-        
-        # Apply recent form adjustment to the prediction (TUNED VERSION)
+        predicted_position = rf_model.predict(X_team)[0]
         form_score = trend_features['recent_form_score']
-        
-        # Much more conservative adjustment factor
-        form_adjustment = -form_score * 0.05  # Reduced from 0.15 to 0.05
+        form_adjustment = -form_score * 0.05
         adjusted_prediction = predicted_position + form_adjustment
-        
-        # Ensure prediction stays within reasonable bounds (1-20)
         adjusted_prediction = max(1, min(20, adjusted_prediction))
-        
-        # Store details for recent form analysis
-        if abs(form_score) > 0.5:  # Only show significant form changes
+        confidence_intervals.append({
+            'team': team,
+            'prediction': ci_results['prediction'],
+            'lower_bound': ci_results['lower_bound'],
+            'upper_bound': ci_results['upper_bound'],
+            'standard_error': ci_results['standard_error'],
+            'interval_width': ci_results['interval_width']
+        })
+        if abs(form_score) > 0.5:
             form_direction = "Improving ↗" if form_score > 0 else "Declining ↘" if form_score < -0.5 else "Stable →"
             recent_form_details.append({
                 'team': team,
                 'form_score': form_score,
                 'direction': form_direction
             })
-        
-        # Store the adjusted result
         predictions.append({'Team': team, 'Predicted Position': adjusted_prediction})
-
-    # Sort predictions by predicted positions (before rounding)
+        print("✓")
     predictions.sort(key=lambda x: x['Predicted Position'])
-
-    # Assign unique integer positions based on the sorted predictions
     for rank, prediction in enumerate(predictions, start=1):
-        prediction['Predicted Position'] = rank    # Convert predictions to DataFrame
+        prediction['Predicted Position'] = rank
     predicted_df = pd.DataFrame(predictions)
-    
-    # Merge predicted positions with actual positions
     actual_df = pd.DataFrame(actual_standings, columns=['Team', 'Actual Position'])
     comparison_df = pd.merge(predicted_df, actual_df, on='Team')
-
-    # Calculate the difference between predicted and actual positions
     comparison_df['Position Difference'] = comparison_df['Predicted Position'] - comparison_df['Actual Position']
-
-    # Save the comparison results to a CSV file
-    output_file = f'{prediction_year}_comparison_predictions.csv'
+    ci_df = pd.DataFrame(confidence_intervals)
+    comparison_df = pd.merge(comparison_df, ci_df, left_on='Team', right_on='team')
+    output_file = f'{prediction_year}_comparison_predictions_with_confidence.csv'
     comparison_df.to_csv(output_file, index=False)
-    
-    # Calculate the R² score (how well the predictions fit the actual standings)
     r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])
-    
-    # Perform cross-validation
     cv_score, cv_details = cross_validate_time_series(data, features, target, prediction_year)
-    
-    print("=" * 60)
-    print("PREMIER LEAGUE 2024 PREDICTION RESULTS (TUNED RECENT FORM + VIZ)")
-    print("=" * 60)
+    print("=" * 70)
+    print("PREMIER LEAGUE 2024 PREDICTION RESULTS (RECENT FORM + CONFIDENCE INTERVALS)")
+    print("=" * 70)
     print(f"Model Accuracy (R² Score): {r2:.3f}")
     print(f"Cross-Validation Score: {cv_score:.3f}")
-    print("Results saved to: 2024_comparison_predictions.csv")
-    
-    # Show recent form analysis
+    print(f"Confidence Level: 95%")
+    print(f"Results saved to: {output_file}")
     if recent_form_details:
         print("\nRECENT FORM ANALYSIS:")
         print("-" * 30)
         for detail in recent_form_details:
             print(f"• {detail['team']:<17} Form Score: {detail['form_score']:+.2f} ({detail['direction']})")
-    
-    # Show top predictions vs actual
-    print("\nTOP PREDICTIONS vs ACTUAL:")
-    print("-" * 45)
-    for i, row in comparison_df.head(10).iterrows():
+    print(f"\nPREDICTIONS WITH 95% CONFIDENCE INTERVALS:")
+    print("-" * 65)
+    print("Team                 Pred  Actual  Diff   95% CI Range    Width")
+    print("-" * 65)
+    for i, row in comparison_df.head(20).iterrows():
         diff = row['Position Difference']
         if abs(diff) <= 1:
             icon = "✓"
@@ -459,25 +446,82 @@ def compare_predictions(teams, actual_standings, prediction_year):
             icon = "~"
         else:
             icon = "✗"
-        
-        print(f"{icon} {row['Team']:<17} Pred: {row['Predicted Position']:2.0f}  Actual: {row['Actual Position']:2.0f}  (Diff: {diff:+.0f})")
-    
-    # Show biggest errors
+        ci_range = f"[{row['lower_bound']:4.1f}, {row['upper_bound']:4.1f}]"
+        width = row['interval_width']
+        print(f"{icon} {row['Team']:<17} {row['Predicted Position']:4.0f}  {row['Actual Position']:6.0f}  {diff:+4.0f}   {ci_range:12}  {width:5.1f}")
+    print(f"\nCONFIDENCE INTERVAL ANALYSIS:")
+    print("-" * 40)
+    narrowest_ci = comparison_df.nsmallest(3, 'interval_width')
+    print("Most confident predictions (narrow intervals):")
+    for i, row in narrowest_ci.iterrows():
+        print(f"• {row['Team']:<17} Width: {row['interval_width']:4.1f} positions")
+    widest_ci = comparison_df.nlargest(3, 'interval_width')
+    print("\nLeast confident predictions (wide intervals):")
+    for i, row in widest_ci.iterrows():
+        print(f"• {row['Team']:<17} Width: {row['interval_width']:4.1f} positions")
     biggest_errors = comparison_df.reindex(comparison_df['Position Difference'].abs().sort_values(ascending=False).index).head(3)
-    print("\nBIGGEST PREDICTION ERRORS:")
+    print(f"\nBIGGEST PREDICTION ERRORS:")
     print("-" * 30)
     for i, row in biggest_errors.iterrows():
-        print(f"• {row['Team']:<17} Off by {abs(row['Position Difference']):.0f} positions (Predicted {row['Predicted Position']:.0f}, Actual {row['Actual Position']:.0f})")
-    
-    print("=" * 60)
-    
-    # Create comprehensive visualizations
+        ci_contains_actual = row['lower_bound'] <= row['Actual Position'] <= row['upper_bound']
+        contains_text = "✓ within CI" if ci_contains_actual else "✗ outside CI"
+        print(f"• {row['Team']:<17} Off by {abs(row['Position Difference']):.0f} positions ({contains_text})")
+    within_ci = sum(1 for _, row in comparison_df.iterrows() 
+                   if row['lower_bound'] <= row['Actual Position'] <= row['upper_bound'])
+    ci_coverage = within_ci / len(comparison_df) * 100
+    print(f"\nCONFIDENCE INTERVAL COVERAGE:")
+    print(f"• {within_ci}/{len(comparison_df)} actual positions within 95% CI ({ci_coverage:.1f}%)")
+    print(f"• Average CI width: {comparison_df['interval_width'].mean():.1f} positions")
+    print("=" * 70)
     print("\nGenerating visualizations...")
     create_visualizations(comparison_df, cv_details, recent_form_details, prediction_year)
     create_recent_form_trends_plot(data, teams, prediction_year)
     print("All visualizations completed!")
-    
     return comparison_df
+
+# Bootstrap confidence interval for recent form model
+
+def bootstrap_confidence_interval_recent_form(historical_data, team_data, features, prediction_year, n_bootstrap=500, confidence_level=0.95):
+    """
+    Calculate confidence intervals for the recent form model using bootstrap sampling.
+    """
+    bootstrap_predictions = []
+    for i in range(n_bootstrap):
+        # Bootstrap sample from historical data
+        sample = historical_data.sample(n=len(historical_data), replace=True, random_state=i)
+        # Train model on bootstrap sample
+        X_boot = sample[features]
+        y_boot = sample[target]
+        rf_boot = RandomForestRegressor(n_estimators=100, random_state=42)
+        rf_boot.fit(X_boot, y_boot)
+        # Get team sample for trend calculation
+        team_bootstrap = sample[sample['team'] == team_data['team'].iloc[0]]
+        if len(team_bootstrap) > 0:
+            trend_features = weighted_average(team_bootstrap, features, prediction_year)
+            X_team = trend_features[features].values.reshape(1, -1)
+            pred = rf_boot.predict(X_team)[0]
+            form_score = trend_features['recent_form_score']
+            form_adjustment = -form_score * 0.05
+            adjusted_prediction = pred + form_adjustment
+            adjusted_prediction = max(1, min(20, adjusted_prediction))
+            bootstrap_predictions.append(adjusted_prediction)
+    if not bootstrap_predictions:
+        return {'prediction': np.nan, 'lower_bound': np.nan, 'upper_bound': np.nan, 'standard_error': np.nan, 'confidence_level': confidence_level}
+    alpha = 1 - confidence_level
+    lower_percentile = (alpha / 2) * 100
+    upper_percentile = (1 - alpha / 2) * 100
+    prediction = np.mean(bootstrap_predictions)
+    lower_bound = np.percentile(bootstrap_predictions, lower_percentile)
+    upper_bound = np.percentile(bootstrap_predictions, upper_percentile)
+    standard_error = np.std(bootstrap_predictions)
+    return {
+        'prediction': prediction,
+        'lower_bound': lower_bound,
+        'upper_bound': upper_bound,
+        'standard_error': standard_error,
+        'confidence_level': confidence_level,
+        'interval_width': upper_bound - lower_bound
+    }
 
 # Hardcoded actual 2024 standings for comparison
 actual_standings_2024 = [

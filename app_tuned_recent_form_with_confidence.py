@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 import warnings
@@ -17,56 +16,11 @@ data = pd.read_csv('pl-tables-1993-2023.csv')
 features = ['points', 'gf', 'ga', 'gd', 'won', 'drawn', 'lost']
 target = 'position'
 
+# Extended features will include recent_form_score when making predictions
+extended_features = features + ['recent_form_score']
+
 X = data[features]  # Feature columns
 y = data[target]    # Target column (Position)
-
-# Train-Test Split (80% training, 20% testing)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-## Initialize Multiple Models for Ensemble
-# Model 1: Random Forest (our current champion)
-rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
-
-# Model 2: Gradient Boosting (learns from mistakes iteratively)
-gb_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
-
-# Model 3: Linear Regression (simple but effective baseline)
-lr_model = LinearRegression()
-
-# Train all models
-print("Training Random Forest...")
-rf_model.fit(X_train, y_train)
-print("Training Gradient Boosting...")
-gb_model.fit(X_train, y_train)
-print("Training Linear Regression...")
-lr_model.fit(X_train, y_train)
-print("All models trained successfully!")
-
-# Test ensemble performance on validation set
-rf_pred = rf_model.predict(X_test)
-gb_pred = gb_model.predict(X_test)
-lr_pred = lr_model.predict(X_test)
-
-# Calculate individual model scores for weight determination
-rf_score = r2_score(y_test, rf_pred)
-gb_score = r2_score(y_test, gb_pred)
-lr_score = r2_score(y_test, lr_pred)
-
-print(f"Individual Model Performance on Validation Set:")
-print(f"Random Forest: {rf_score:.3f}")
-print(f"Gradient Boosting: {gb_score:.3f}")
-print(f"Linear Regression: {lr_score:.3f}")
-
-# Calculate ensemble weights based on performance
-total_score = rf_score + gb_score + lr_score
-rf_weight = rf_score / total_score
-gb_weight = gb_score / total_score
-lr_weight = lr_score / total_score
-
-print(f"\nEnsemble Weights:")
-print(f"Random Forest: {rf_weight:.3f}")
-print(f"Gradient Boosting: {gb_weight:.3f}")
-print(f"Linear Regression: {lr_weight:.3f}")
 
 # Function to calculate weighted average with recent form
 def weighted_average(team_data, features, current_year):
@@ -136,25 +90,10 @@ def calculate_recent_form_score(team_data, current_year, last_n_seasons=3):
     
     return 0
 
-# Function to make ensemble predictions
-def ensemble_predict(X_team, rf_model, gb_model, lr_model, rf_weight, gb_weight, lr_weight):
-    """
-    Make prediction using weighted ensemble of all three models
-    """
-    # Get predictions from all models
-    rf_pred = rf_model.predict(X_team)[0]
-    gb_pred = gb_model.predict(X_team)[0]
-    lr_pred = lr_model.predict(X_team)[0]
-    
-    # Calculate weighted ensemble prediction
-    ensemble_pred = (rf_pred * rf_weight) + (gb_pred * gb_weight) + (lr_pred * lr_weight)
-    
-    return ensemble_pred, rf_pred, gb_pred, lr_pred
-
 # Bootstrap sampling function for confidence intervals
-def bootstrap_confidence_interval(historical_data, team_data, features, prediction_year, n_bootstrap=100, confidence_level=0.95):
+def bootstrap_confidence_interval_recent_form(historical_data, team_data, features, prediction_year, n_bootstrap=1000, confidence_level=0.95):
     """
-    Calculate confidence intervals using bootstrap sampling
+    Calculate confidence intervals using bootstrap sampling for recent form model
     
     Args:
         historical_data: Historical dataset
@@ -169,36 +108,32 @@ def bootstrap_confidence_interval(historical_data, team_data, features, predicti
     """
     bootstrap_predictions = []
     
-    # Pre-calculate team name for efficiency
-    team_name = team_data['team'].iloc[0]
-    
     for i in range(n_bootstrap):
-        # Create bootstrap sample by sampling with replacement (smaller sample for speed)
-        sample_size = min(len(historical_data), 200)  # Limit sample size for speed
-        bootstrap_sample = historical_data.sample(n=sample_size, replace=True, random_state=i)
+        # Create bootstrap sample by sampling with replacement
+        bootstrap_sample = historical_data.sample(n=len(historical_data), replace=True, random_state=i)
         
-        # Train only Random Forest for speed (most important model)
+        # Train model on bootstrap sample
         X_boot = bootstrap_sample[features]
         y_boot = bootstrap_sample[target]
         
-        rf_boot = RandomForestRegressor(n_estimators=50, random_state=42)  # Reduced trees for speed
+        rf_boot = RandomForestRegressor(n_estimators=100, random_state=42)
         rf_boot.fit(X_boot, y_boot)
         
         # Get team's bootstrap sample for trend calculation
-        team_bootstrap = bootstrap_sample[bootstrap_sample['team'] == team_name]
+        team_bootstrap = bootstrap_sample[bootstrap_sample['team'] == team_data['team'].iloc[0]]
         
         if len(team_bootstrap) > 0:
             # Calculate weighted average features
             trend_features = weighted_average(team_bootstrap, features, prediction_year)
             X_team = trend_features[features].values.reshape(1, -1)
             
-            # Make simple RF prediction (skip ensemble for speed)
-            rf_pred = rf_boot.predict(X_team)[0]
+            # Make prediction
+            predicted_pos = rf_boot.predict(X_team)[0]
             
             # Apply recent form adjustment
             form_score = trend_features['recent_form_score']
             form_adjustment = -form_score * 0.05
-            adjusted_prediction = rf_pred + form_adjustment
+            adjusted_prediction = predicted_pos + form_adjustment
             adjusted_prediction = max(1, min(20, adjusted_prediction))
             
             bootstrap_predictions.append(adjusted_prediction)
@@ -221,13 +156,13 @@ def bootstrap_confidence_interval(historical_data, team_data, features, predicti
         'confidence_level': confidence_level
     }
 
-# Cross-validation function for ensemble time-series validation
-def cross_validate_ensemble_time_series(data, features, target, prediction_year):
+# Cross-validation function for time-series validation
+def cross_validate_time_series(data, features, target, prediction_year):
     """
-    Perform time-series cross-validation using ensemble approach.
+    Perform time-series cross-validation using chronological splits.
     Returns average CV score across multiple time periods.
     """
-    # Define validation periods
+    # Define validation periods (train on earlier data, test on later)
     cv_periods = [
         {'train_end': 2013, 'test_start': 2014, 'test_end': 2016},
         {'train_end': 2016, 'test_start': 2017, 'test_end': 2019},
@@ -249,36 +184,14 @@ def cross_validate_ensemble_time_series(data, features, target, prediction_year)
         X_train_cv = train_data[features]
         y_train_cv = train_data[target]
         
-        # Train ensemble models on this fold
+        # Train model on this fold
         rf_cv = RandomForestRegressor(n_estimators=100, random_state=42)
-        gb_cv = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
-        lr_cv = LinearRegression()
-        
         rf_cv.fit(X_train_cv, y_train_cv)
-        gb_cv.fit(X_train_cv, y_train_cv)
-        lr_cv.fit(X_train_cv, y_train_cv)
-        
-        # Calculate weights for this fold
-        X_val = train_data[features].iloc[-len(train_data)//4:]  # Use last 25% of training as validation
-        y_val = train_data[target].iloc[-len(train_data)//4:]
-        
-        rf_val_pred = rf_cv.predict(X_val)
-        gb_val_pred = gb_cv.predict(X_val)
-        lr_val_pred = lr_cv.predict(X_val)
-        
-        rf_val_score = max(0.01, r2_score(y_val, rf_val_pred))  # Prevent negative weights
-        gb_val_score = max(0.01, r2_score(y_val, gb_val_pred))
-        lr_val_score = max(0.01, r2_score(y_val, lr_val_pred))
-        
-        total_score = rf_val_score + gb_val_score + lr_val_score
-        rf_w = rf_val_score / total_score
-        gb_w = gb_val_score / total_score
-        lr_w = lr_val_score / total_score
         
         # Get unique teams from test period
         test_teams = test_data['team'].unique()
         
-        # Make ensemble predictions for each team in test period
+        # Make predictions for each team in test period
         fold_predictions = []
         fold_actuals = []
         
@@ -296,13 +209,13 @@ def cross_validate_ensemble_time_series(data, features, target, prediction_year)
                 trend_features = weighted_average(team_historical, features, row['season_end_year'])
                 X_team = trend_features[features].values.reshape(1, -1)
                 
-                # Make ensemble prediction
-                ensemble_pred, _, _, _ = ensemble_predict(X_team, rf_cv, gb_cv, lr_cv, rf_w, gb_w, lr_w)
+                # Make prediction
+                predicted_pos = rf_cv.predict(X_team)[0]
                 
                 # Apply recent form adjustment
                 form_score = trend_features['recent_form_score']
                 form_adjustment = -form_score * 0.05
-                adjusted_prediction = ensemble_pred + form_adjustment
+                adjusted_prediction = predicted_pos + form_adjustment
                 adjusted_prediction = max(1, min(20, adjusted_prediction))
                 
                 fold_predictions.append(adjusted_prediction)
@@ -314,7 +227,14 @@ def cross_validate_ensemble_time_series(data, features, target, prediction_year)
     
     return np.mean(cv_scores) if cv_scores else 0.0
 
-# Function to Predict for a Specified Year using ensemble approach with confidence intervals
+# Train final model on all historical data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+## Random Forest Regressor
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+
+# Function to Predict for a Specified Year using recent form analysis with confidence intervals
 def compare_predictions_with_confidence(teams, actual_standings, prediction_year, confidence_level=0.95):
     # Filter the data for seasons that occurred before the given prediction year
     historical_data = data[data['season_end_year'] < prediction_year]
@@ -322,19 +242,16 @@ def compare_predictions_with_confidence(teams, actual_standings, prediction_year
     if historical_data.empty:
         raise ValueError(f"No historical data available before {prediction_year}.")
 
-    # Retrain models on historical data only
+    # Retrain model on historical data only
     X_historical = historical_data[features]
     y_historical = historical_data[target]
     
     rf_model.fit(X_historical, y_historical)
-    gb_model.fit(X_historical, y_historical)
-    lr_model.fit(X_historical, y_historical)
 
     predictions = []
     confidence_intervals = []
     recent_form_details = []
-    ensemble_details = []
-
+    
     print(f"Calculating confidence intervals using bootstrap sampling...")
     
     for i, team in enumerate(teams, 1):
@@ -346,9 +263,9 @@ def compare_predictions_with_confidence(teams, actual_standings, prediction_year
         if team_data.empty:
             print(f"Warning: No historical data found for team '{team}'. Skipping prediction.")
             continue        # Calculate confidence intervals using bootstrap sampling
-        ci_results = bootstrap_confidence_interval(
+        ci_results = bootstrap_confidence_interval_recent_form(
             historical_data, team_data, features, prediction_year, 
-            n_bootstrap=100, confidence_level=confidence_level  # Reduced significantly for faster execution
+            n_bootstrap=100, confidence_level=confidence_level  # Reduced for faster execution
         )
         
         # Calculate the weighted average of past performance metrics for the team
@@ -357,17 +274,13 @@ def compare_predictions_with_confidence(teams, actual_standings, prediction_year
         # Use only the original features for prediction
         X_team = trend_features[features].values.reshape(1, -1)
 
-        # Get ensemble prediction and individual model predictions
-        ensemble_pred, rf_pred, gb_pred, lr_pred = ensemble_predict(
-            X_team, rf_model, gb_model, lr_model, rf_weight, gb_weight, lr_weight
-        )
+        # Predict the position using the model
+        predicted_pos = rf_model.predict(X_team)[0]
         
-        # Apply recent form adjustment to the ensemble prediction
+        # Apply recent form adjustment using the tuned conservative factor
         form_score = trend_features['recent_form_score']
-        
-        # Conservative adjustment factor (same as tuned version)
-        form_adjustment = -form_score * 0.05
-        adjusted_prediction = ensemble_pred + form_adjustment
+        form_adjustment = -form_score * 0.05  # Conservative adjustment factor
+        adjusted_prediction = predicted_pos + form_adjustment
         
         # Ensure prediction stays within reasonable bounds (1-20)
         adjusted_prediction = max(1, min(20, adjusted_prediction))
@@ -382,25 +295,14 @@ def compare_predictions_with_confidence(teams, actual_standings, prediction_year
             'interval_width': ci_results['upper_bound'] - ci_results['lower_bound']
         })
         
-        # Store details for analysis
+        # Store details for analysis (only significant form changes)
         if abs(form_score) > 0.5:  # Only show significant form changes
             form_direction = "Improving ↗" if form_score > 0 else "Declining ↘" if form_score < -0.5 else "Stable →"
             recent_form_details.append({
                 'team': team,
                 'form_score': form_score,
-                'direction': form_direction
-            })
-        
-        # Store ensemble details for interesting cases
-        model_variance = np.std([rf_pred, gb_pred, lr_pred])
-        if model_variance > 2:  # Show cases where models disagree significantly
-            ensemble_details.append({
-                'team': team,
-                'rf_pred': rf_pred,
-                'gb_pred': gb_pred,
-                'lr_pred': lr_pred,
-                'ensemble': ensemble_pred,
-                'variance': model_variance
+                'direction': form_direction,
+                'adjustment': form_adjustment
             })
         
         # Store the adjusted result
@@ -429,37 +331,29 @@ def compare_predictions_with_confidence(teams, actual_standings, prediction_year
     comparison_df = pd.merge(comparison_df, ci_df, left_on='Team', right_on='team')
 
     # Save the comparison results to a CSV file
-    output_file = f'{prediction_year}_comparison_predictions_with_confidence.csv'
+    output_file = f'{prediction_year}_recent_form_predictions_with_confidence.csv'
     comparison_df.to_csv(output_file, index=False)
     
     # Calculate the R² score
     r2 = r2_score(comparison_df['Actual Position'], comparison_df['Predicted Position'])
     
     # Perform cross-validation
-    cv_score = cross_validate_ensemble_time_series(data, features, target, prediction_year)
+    cv_score = cross_validate_time_series(data, features, target, prediction_year)
     
     print("\n" + "=" * 70)
-    print("PREMIER LEAGUE 2024 PREDICTION RESULTS (ENSEMBLE + CONFIDENCE INTERVALS)")
+    print("PREMIER LEAGUE 2024 PREDICTION RESULTS (RECENT FORM + CONFIDENCE INTERVALS)")
     print("=" * 70)
     print(f"Model Accuracy (R² Score): {r2:.3f}")
     print(f"Cross-Validation Score: {cv_score:.3f}")
     print(f"Confidence Level: {confidence_level*100:.0f}%")
     print(f"Results saved to: {output_file}")
     
-    # Show ensemble analysis for disagreeing models
-    if ensemble_details:
-        print(f"\nENSEMBLE MODEL ANALYSIS:")
-        print("-" * 30)
-        print("Teams where models disagreed significantly:")
-        for detail in ensemble_details[:5]:  # Show top 5
-            print(f"• {detail['team']:<17} RF:{detail['rf_pred']:4.1f} GB:{detail['gb_pred']:4.1f} LR:{detail['lr_pred']:4.1f} → Ens:{detail['ensemble']:4.1f}")
-    
     # Show recent form analysis
     if recent_form_details:
         print(f"\nRECENT FORM ANALYSIS:")
-        print("-" * 30)
+        print("-" * 40)
         for detail in recent_form_details:
-            print(f"• {detail['team']:<17} Form Score: {detail['form_score']:+.2f} ({detail['direction']})")
+            print(f"• {detail['team']:<17} Form Score: {detail['form_score']:+.2f} ({detail['direction']}) Adj: {detail['adjustment']:+.2f}")
     
     # Show predictions with confidence intervals
     print(f"\nPREDICTIONS WITH {confidence_level*100:.0f}% CONFIDENCE INTERVALS:")
@@ -545,5 +439,5 @@ actual_standings_2024 = [
 
 teams_2024 = ['Manchester City', 'Arsenal', 'Liverpool', 'Aston Villa', 'Tottenham', 'Chelsea', 'Newcastle Utd', 'Manchester Utd', 'West Ham', 'Crystal Palace', 'Brighton', 'Bournemouth', 'Fulham', 'Wolves', 'Everton', 'Brentford', 'Nottingham Forest', 'Luton Town', 'Burnley', 'Sheffield Utd']
 
-# Call function to compare predictions for 2024 using ensemble approach with confidence intervals
+# Call function to compare predictions for 2024 using recent form approach with confidence intervals
 compare_predictions_with_confidence(teams_2024, actual_standings_2024, 2024, confidence_level=0.95)
