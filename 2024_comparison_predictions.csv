@@ -1,13 +1,13 @@
 Team,Predicted Position,Actual Position,Position Difference
 Manchester City,1,1,0
-Liverpool,2,3,-1
-Arsenal,3,2,1
+Arsenal,2,2,0
+Liverpool,3,3,0
 Manchester Utd,4,8,-4
-Tottenham,5,5,0
-Newcastle Utd,6,7,-1
-Brentford,7,16,-9
+Newcastle Utd,5,7,-2
+Tottenham,6,5,1
+Brighton,7,11,-4
 Chelsea,8,6,2
-Brighton,9,11,-2
+Brentford,9,16,-7
 Aston Villa,10,4,6
 Crystal Palace,11,10,1
 Fulham,12,13,-1
@@ -15,7 +15,7 @@ West Ham,13,9,4
 Wolves,14,14,0
 Bournemouth,15,12,3
 Everton,16,15,1
-Nottingham Forest,17,17,0
-Burnley,18,19,-1
+Burnley,17,19,-2
+Nottingham Forest,18,17,1
 Sheffield Utd,19,20,-1
 Luton Town,20,18,2
